@@ -45,6 +45,7 @@ namespace DuplicateEMailRemover
         private Label lblEta = null!;
         private Button btnRestore = null!;
         private ListView lvDeleted = null!;
+        private CheckBox checkBoxMatchOnMessageId = null!;
 
         // Folders we should skip - these folders should not really be scanned for duplicate emails.
         private static readonly SortedSet<string> FoldersToSkip = [
@@ -92,6 +93,26 @@ namespace DuplicateEMailRemover
             }
 
             BuildProgressAndRestoreUi();
+            BuildMessageIdMatchOption();
+        }
+
+        // Adds a "Message-ID" matching option to the criteria group. The Internet
+        // Message-ID uniquely identifies an email, so combining it with date +
+        // sender + subject is the most reliable way to detect true duplicates.
+        private void BuildMessageIdMatchOption()
+        {
+            checkBoxMatchOnMessageId = new CheckBox
+            {
+                AutoSize = true,
+                Location = new Point(421, 116),
+                Text = "Message-ID",
+                UseVisualStyleBackColor = true
+            };
+            toolTip1.SetToolTip(checkBoxMatchOnMessageId,
+                "Match on the email's unique Internet Message-ID header. " +
+                "Best combined with Date Sent + Sender + Subject.");
+            checkBoxMatchOnMessageId.CheckedChanged += checkBoxMatchOn_CheckedChanged;
+            groupBoxWhatToMatchOn.Controls.Add(checkBoxMatchOnMessageId);
         }
 
         // Adds the live progress details, the "deleted emails" list, and the
@@ -428,7 +449,8 @@ namespace DuplicateEMailRemover
                 return;
             }
 
-            if (!checkBoxMatchOnBody.Checked && !checkBoxMatchOnHTMLBody.Checked)
+            if (!checkBoxMatchOnBody.Checked && !checkBoxMatchOnHTMLBody.Checked
+                && checkBoxMatchOnMessageId?.Checked != true)
             {
                 DialogResult result = MessageBox.Show("Neither the \"Email Body\" or \"Body(HTLM)\" were selected.\n" +
                     "This can cause unintended non-duplicate messages to be moved/deleted.\n\n" +
@@ -473,7 +495,8 @@ namespace DuplicateEMailRemover
         {
 
             int checkCount =
-                  (checkBoxMatchOnSentOn.Checked ? 1 : 0)
+                  (checkBoxMatchOnMessageId?.Checked == true ? 1 : 0)
+                + (checkBoxMatchOnSentOn.Checked ? 1 : 0)
                 + (checkBoxMatchOnReceivedTime.Checked ? 1 : 0)
                 + (checkBoxMatchOnLastModTime.Checked ? 1 : 0)
                 + (checkBoxMatchOnSenderEmail.Checked ? 1 : 0)
@@ -560,6 +583,7 @@ namespace DuplicateEMailRemover
                 s.Folders.Add(((FolderTreeNode)obj).OutlookFolder);
             }
 
+            s.MatchMessageId = checkBoxMatchOnMessageId?.Checked == true;
             s.MatchSentOn = checkBoxMatchOnSentOn.Checked;
             s.MatchReceivedTime = checkBoxMatchOnReceivedTime.Checked;
             s.MatchLastModTime = checkBoxMatchOnLastModTime.Checked;
@@ -633,6 +657,7 @@ namespace DuplicateEMailRemover
             // Duplicate detection is delegated to the (unit-tested) Core library.
             MatchOptions matchOptions = new()
             {
+                MessageId = settings.MatchMessageId,
                 SentOn = settings.MatchSentOn,
                 ReceivedTime = settings.MatchReceivedTime,
                 LastModTime = settings.MatchLastModTime,
@@ -1007,6 +1032,7 @@ namespace DuplicateEMailRemover
     {
         public List<Outlook.Folder> Folders { get; } = [];
 
+        public bool MatchMessageId { get; set; }
         public bool MatchSentOn { get; set; }
         public bool MatchReceivedTime { get; set; }
         public bool MatchLastModTime { get; set; }

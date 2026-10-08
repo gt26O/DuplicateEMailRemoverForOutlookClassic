@@ -6,6 +6,7 @@ namespace DuplicateEMailRemover.Core
 {
     public sealed class MatchOptions
     {
+        public bool MessageId { get; set; }
         public bool SentOn { get; set; }
         public bool ReceivedTime { get; set; }
         public bool LastModTime { get; set; }
@@ -20,7 +21,7 @@ namespace DuplicateEMailRemover.Core
 
         // Number of fields selected. The app requires at least two.
         public int SelectedCount =>
-            (SentOn ? 1 : 0) + (ReceivedTime ? 1 : 0) + (LastModTime ? 1 : 0)
+            (MessageId ? 1 : 0) + (SentOn ? 1 : 0) + (ReceivedTime ? 1 : 0) + (LastModTime ? 1 : 0)
             + (SenderEmail ? 1 : 0) + (To ? 1 : 0) + (CC ? 1 : 0) + (BCC ? 1 : 0)
             + (Subject ? 1 : 0) + (Body ? 1 : 0) + (HtmlBody ? 1 : 0) + (Attachment ? 1 : 0);
     }

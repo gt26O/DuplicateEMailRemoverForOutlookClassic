@@ -14,9 +14,38 @@ namespace DuplicateEMailRemover
     {
         private readonly Outlook.MailItem mail;
 
+        // MAPI property tag for the Internet "Message-ID" header (PR_INTERNET_MESSAGE_ID, PT_UNICODE).
+        private const string PrInternetMessageId = "http://schemas.microsoft.com/mapi/proptag/0x1035001F";
+
         public OutlookMailItemAdapter(Outlook.MailItem mailItem)
         {
             mail = mailItem;
+        }
+
+        public string MessageId
+        {
+            get
+            {
+                Outlook.PropertyAccessor? accessor = null;
+                try
+                {
+                    accessor = mail.PropertyAccessor;
+                    object value = accessor.GetProperty(PrInternetMessageId);
+                    return value?.ToString() ?? "";
+                }
+                catch
+                {
+                    // Item has no Internet Message-ID (drafts, some non-SMTP items).
+                    return "";
+                }
+                finally
+                {
+                    if (accessor != null)
+                    {
+                        _ = Marshal.ReleaseComObject(accessor);
+                    }
+                }
+            }
         }
 
         public string SentOn => mail.SentOn.ToString();

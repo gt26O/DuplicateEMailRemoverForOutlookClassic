@@ -52,6 +52,45 @@ namespace DuplicateEMailRemover.Core.Tests
         }
 
         [Fact]
+        public void MessageIdPlusDateSenderSubject_IdentifiesDuplicates()
+        {
+            // The recommended scheme: Message-ID + Date Sent + Sender + Subject.
+            MatchOptions o = new() { MessageId = true, SentOn = true, SenderEmail = true, Subject = true };
+
+            FakeMailItem original = new()
+            {
+                MessageId = "<abc123@mail.example.com>",
+                SentOn = "2026-01-02 10:00:00",
+                SenderEmailAddress = "a@x.com",
+                Subject = "Invoice",
+                Body = "copy stored in Inbox"
+            };
+            FakeMailItem sameMailDifferentFolder = new()
+            {
+                MessageId = "<abc123@mail.example.com>",
+                SentOn = "2026-01-02 10:00:00",
+                SenderEmailAddress = "a@x.com",
+                Subject = "Invoice",
+                Body = "copy stored in Archive (body text differs slightly)"
+            };
+
+            // Same Message-ID + date + sender + subject => same identity, even if the body differs.
+            Assert.Equal(
+                DuplicateKeyBuilder.ComputeHash(original, o),
+                DuplicateKeyBuilder.ComputeHash(sameMailDifferentFolder, o));
+        }
+
+        [Fact]
+        public void DifferentMessageId_AreNotDuplicates()
+        {
+            MatchOptions o = new() { MessageId = true, SentOn = true, SenderEmail = true, Subject = true };
+            FakeMailItem a = new() { MessageId = "<id-1@x>", SentOn = "D", SenderEmailAddress = "a@x", Subject = "S" };
+            FakeMailItem b = new() { MessageId = "<id-2@x>", SentOn = "D", SenderEmailAddress = "a@x", Subject = "S" };
+
+            Assert.NotEqual(DuplicateKeyBuilder.ComputeHash(a, o), DuplicateKeyBuilder.ComputeHash(b, o));
+        }
+
+        [Fact]
         public void Hash_IsUpperHexMd5OfKey()
         {
             // Known MD5 of the empty string.

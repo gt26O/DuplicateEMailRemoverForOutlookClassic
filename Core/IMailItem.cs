@@ -11,6 +11,10 @@ namespace DuplicateEMailRemover.Core
 {
     public interface IMailItem
     {
+        // The Internet "Message-ID" header (PR_INTERNET_MESSAGE_ID). Globally
+        // unique per email when present; empty for items that have none.
+        string MessageId { get; }
+
         string SentOn { get; }
         string ReceivedTime { get; }
         string LastModificationTime { get; }

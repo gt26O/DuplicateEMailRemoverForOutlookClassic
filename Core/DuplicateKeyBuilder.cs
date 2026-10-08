@@ -18,6 +18,7 @@ namespace DuplicateEMailRemover.Core
         {
             StringBuilder sb = new(1024);
 
+            if (options.MessageId) { _ = sb.Append(item.MessageId); }
             if (options.SentOn) { _ = sb.Append(item.SentOn); }
             if (options.ReceivedTime) { _ = sb.Append(item.ReceivedTime); }
             if (options.LastModTime) { _ = sb.Append(item.LastModificationTime); }

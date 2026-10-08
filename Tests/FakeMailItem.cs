@@ -5,6 +5,7 @@ namespace DuplicateEMailRemover.Core.Tests
     // A simple in-memory IMailItem for tests (no Outlook needed).
     internal sealed class FakeMailItem : IMailItem
     {
+        public string MessageId { get; set; } = "";
         public string SentOn { get; set; } = "";
         public string ReceivedTime { get; set; } = "";
         public string LastModificationTime { get; set; } = "";

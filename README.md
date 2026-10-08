@@ -13,7 +13,7 @@
 - **Flexible Actions**: Options include deleting, moving, copying, logging, or opening duplicates in Outlook.
   ![image](https://github.com/user-attachments/assets/6591de03-1d4b-4d98-8d21-2781616fe012)
 
-- **Advanced Matching Options**: Match duplicates based on fields like date, sender, subject, body, and attachments.
+- **Advanced Matching Options**: Match duplicates based on fields like the unique **Message-ID** header, date, sender, subject, body, and attachments. The most reliable combination is **Message-ID + Date Sent + Sender + Subject**, which identifies the same email across folders even when its body or formatting differs slightly.
 - **Backup Capability**: Save duplicates to a specified Windows file folder for backup.
 - **Compatibility**: Designed for Outlook Classic and does not support the "New Outlook" version.
 
