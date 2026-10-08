@@ -5,6 +5,7 @@
 // their backup .msg files. Restore does not depend on Outlook EntryIDs, so it
 // works even for Exchange / Office 365 accounts where IDs change over time.
 
+using DuplicateEMailRemover.Core;
 using Outlook = Microsoft.Office.Interop.Outlook;
 
 namespace DuplicateEMailRemover

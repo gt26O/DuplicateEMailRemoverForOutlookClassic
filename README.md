@@ -71,6 +71,28 @@ PST files (tens of GB):
 > Tip for a 30 GB PST: **back up the .pst first**, run once in *Log only* mode to
 > review the report, and process folders in batches.
 
+## Project Layout & Tests
+
+The duplicate-detection logic lives in a small, Outlook-free library so it can be
+unit tested on any platform:
+
+- `DuplicateEMailRemoverForOutlookClassic.csproj` — the WinForms app (net8.0-windows,
+  Outlook COM). Built in Visual Studio on Windows.
+- `Core/` (`DuplicateEMailRemover.Core`, net8.0) — `IMailItem`, `MatchOptions`,
+  `DuplicateKeyBuilder`, `DuplicateClassifier`, and the deleted-email manifest.
+  No Outlook/Windows dependency.
+- `Tests/` (`DuplicateEMailRemover.Core.Tests`, xUnit) — tests for the matching
+  key, the first-wins duplicate classification, and the manifest CSV/JSON.
+
+Run the tests (no Outlook needed):
+
+```bash
+dotnet test Tests/DuplicateEMailRemover.Core.Tests.csproj
+```
+
+Continuous integration builds the Core library and runs these tests on every push
+(`.github/workflows/ci.yml`). The WinForms app itself is compiled on Windows.
+
 ## System Requirements
 - **Microsoft Office Outlook Classic** installed.
 - **.NET 8 LTS** runtime.

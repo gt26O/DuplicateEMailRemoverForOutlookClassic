@@ -7,7 +7,7 @@
 using System.Text;
 using System.Text.Json;
 
-namespace DuplicateEMailRemover
+namespace DuplicateEMailRemover.Core
 {
     // One deleted email. Holds everything needed to list it and to restore it
     // from its backup .msg file, without relying on Outlook EntryIDs (which can

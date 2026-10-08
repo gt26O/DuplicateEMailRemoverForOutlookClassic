@@ -10,9 +10,9 @@
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using DuplicateEMailRemover.Core;
 using Outlook = Microsoft.Office.Interop.Outlook;
 
 
@@ -630,8 +630,22 @@ namespace DuplicateEMailRemover
 
             Outlook.NameSpace ns = outlook.GetNamespace("MAPI");
 
-            // hash -> folder path of the first (kept) occurrence.
-            Dictionary<string, string> hs = [];
+            // Duplicate detection is delegated to the (unit-tested) Core library.
+            MatchOptions matchOptions = new()
+            {
+                SentOn = settings.MatchSentOn,
+                ReceivedTime = settings.MatchReceivedTime,
+                LastModTime = settings.MatchLastModTime,
+                SenderEmail = settings.MatchSenderEmail,
+                To = settings.MatchTo,
+                CC = settings.MatchCC,
+                BCC = settings.MatchBCC,
+                Subject = settings.MatchSubject,
+                Body = settings.MatchBody,
+                HtmlBody = settings.MatchHTMLBody,
+                Attachment = settings.MatchAttachment
+            };
+            DuplicateClassifier classifier = new(matchOptions);
 
             // Delete/Move/Copy are collected here and applied AFTER the scan.
             // Acting on items while enumerating a folder's Items collection silently
@@ -693,81 +707,13 @@ namespace DuplicateEMailRemover
                         continue;
                     }
 
-                    // Build the attributes to check for duplicates. (Subject/Received date/Sender/etc.)
-                    _ = sb.Clear();
-                    if (settings.MatchSentOn)
-                    {
-                        _ = sb.Append(mailItem.SentOn.ToString());
-                    }
+                    // Classify this email (duplicate detection lives in Core).
+                    ClassificationResult classification = classifier.Classify(new OutlookMailItemAdapter(mailItem), folderPath);
+                    string hash = classification.Hash;
 
-                    if (settings.MatchReceivedTime)
+                    if (classification.Disposition == MailDisposition.Duplicate)
                     {
-                        _ = sb.Append(mailItem.ReceivedTime.ToString());
-                    }
-
-                    if (settings.MatchLastModTime)
-                    {
-                        _ = sb.Append(mailItem.LastModificationTime.ToString());
-                    }
-
-                    if (settings.MatchSenderEmail)
-                    {
-                        _ = sb.Append(mailItem.SenderEmailAddress);
-                    }
-
-                    if (settings.MatchTo)
-                    {
-                        _ = sb.Append(mailItem.To);
-                    }
-
-                    if (settings.MatchCC)
-                    {
-                        _ = sb.Append(mailItem.CC);
-                    }
-
-                    if (settings.MatchBCC)
-                    {
-                        _ = sb.Append(mailItem.BCC);
-                    }
-
-                    if (settings.MatchSubject)
-                    {
-                        _ = sb.Append(mailItem.Subject);
-                    }
-
-                    if (settings.MatchBody)
-                    {
-                        _ = sb.Append(mailItem.Body);
-                    }
-
-                    if (settings.MatchHTMLBody)
-                    {
-                        _ = sb.Append(mailItem.HTMLBody);
-                    }
-
-                    if (settings.MatchAttachment)
-                    {
-                        Outlook.Attachments attachments = mailItem.Attachments;
-                        foreach (Outlook.Attachment attachment in attachments)
-                        {
-                            _ = sb.Append(attachment.FileName);
-                            _ = Marshal.ReleaseComObject(attachment);
-                        }
-                        _ = Marshal.ReleaseComObject(attachments);
-                    }
-
-                    byte[] buffer = Encoding.UTF8.GetBytes(sb.ToString());
-                    byte[] digest = MD5.HashData(buffer);
-
-                    _ = sb.Clear();
-                    for (int j = 0; j < digest.Length; j++)
-                    {
-                        _ = sb.Append(digest[j].ToString("X2"));
-                    }
-                    string hash = sb.ToString();
-
-                    if (hs.TryGetValue(hash, out string? origFolder))
-                    {
+                        string origFolder = classification.OriginalFolderPath;
                         duplicateCount.Report(++totalDuplicateCount);
 
                         // We have a duplicate, lets first log it.
@@ -892,10 +838,6 @@ namespace DuplicateEMailRemover
                             deferred.Add(new DeferredAction(mailItem.EntryID, folder.StoreID, folderPath, null));
                             sw.Write(settings.Move ? "  Email queued to move\r\n" : "  Email queued to copy\r\n");
                         }
-                    }
-                    else
-                    {
-                        hs[hash] = folderPath;
                     }
 
                     _ = Marshal.ReleaseComObject(mailItem);

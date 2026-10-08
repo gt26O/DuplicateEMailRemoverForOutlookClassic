@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  core-tests:
+    name: Build & test Core (cross-platform)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # Only the Core library and its tests are cross-platform. The WinForms app
+      # (DuplicateEMailRemoverForOutlookClassic.csproj) targets net8.0-windows and
+      # references Outlook COM, so it is built in Visual Studio on Windows, not here.
+      - name: Restore
+        run: dotnet restore Tests/DuplicateEMailRemover.Core.Tests.csproj
+
+      - name: Build
+        run: dotnet build --no-restore -c Release Tests/DuplicateEMailRemover.Core.Tests.csproj
+
+      - name: Test
+        run: dotnet test --no-build -c Release Tests/DuplicateEMailRemover.Core.Tests.csproj --logger "console;verbosity=normal"
