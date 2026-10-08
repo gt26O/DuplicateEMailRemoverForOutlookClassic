@@ -8,6 +8,21 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <!-- This project lives at the repo root, so its default globs would otherwise
+       pull in the Core and Tests sub-projects. Exclude them here. -->
+  <ItemGroup>
+    <Compile Remove="Core\**" />
+    <Compile Remove="Tests\**" />
+    <EmbeddedResource Remove="Core\**" />
+    <EmbeddedResource Remove="Tests\**" />
+    <None Remove="Core\**" />
+    <None Remove="Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Core\DuplicateEMailRemover.Core.csproj" />
+  </ItemGroup>
+
   <ItemGroup>
     <COMReference Include="Microsoft.Office.Interop.Outlook">
       <WrapperTool>tlbimp</WrapperTool>
@@ -18,10 +33,6 @@
       <Isolated>false</Isolated>
       <EmbedInteropTypes>true</EmbedInteropTypes>
     </COMReference>
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.13.2" />
   </ItemGroup>
 
 </Project>

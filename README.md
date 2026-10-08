@@ -13,9 +13,85 @@
 - **Flexible Actions**: Options include deleting, moving, copying, logging, or opening duplicates in Outlook.
   ![image](https://github.com/user-attachments/assets/6591de03-1d4b-4d98-8d21-2781616fe012)
 
-- **Advanced Matching Options**: Match duplicates based on fields like date, sender, subject, body, and attachments.
+- **Advanced Matching Options**: Match duplicates based on fields like the unique **Message-ID** header, date, sender, subject, body, and attachments. The most reliable combination is **Message-ID + Date Sent + Sender + Subject**, which identifies the same email across folders even when its body or formatting differs slightly.
 - **Backup Capability**: Save duplicates to a specified Windows file folder for backup.
 - **Compatibility**: Designed for Outlook Classic and does not support the "New Outlook" version.
+
+## Delete with Backup, Audit List, and Restore
+
+The tool now treats deletion as a safe, reversible, fully audited operation:
+
+- **Works directly in Outlook Classic** through COM automation, including
+  **Exchange / Office 365** accounts. Deletions made here go to *Deleted Items*
+  and sync to the server like any other Outlook change (cached-mode accounts
+  recommended for speed on very large mailboxes).
+- **Live progress with detail.** The *Go* tab shows the current folder,
+  elapsed time, processing **rate**, an **ETA**, running counts, and a live list
+  of the emails being deleted.
+- **Every deleted email is backed up first.** Before an email is deleted it is
+  exported to its own `.msg` file in a timestamped backup folder
+  (`Documents\DuplicateEmailRemover\Backup_<date>` by default, or the folder you
+  pick). If the backup fails, the email is **not** deleted.
+- **An audit list with a unique id.** Each backup folder contains
+  `DeletedEmails.csv` and `DeletedEmails.json` listing every deleted email with a
+  unique id, subject, sender, dates, size, hash, original folder, and backup
+  file.
+- **One-click restore.** The **"Restore deleted emails…"** button opens a window
+  that loads a manifest, lists the deleted emails, and puts any selected ones
+  back into Outlook — into their original folder (or the Inbox if that folder no
+  longer exists). Restore reads the `.msg` backups, so it works even on Exchange
+  where item ids change over time.
+
+### Restoring later
+
+1. On the *Go* tab click **Restore deleted emails…**.
+2. Open the `DeletedEmails.json` file inside the backup folder.
+3. Check the emails to restore and click **Restore checked** (or **Restore all
+   pending**). The manifest is updated to mark what has been restored.
+
+## Reliability Improvements
+
+Recent changes make the tool safer and more dependable on large mailboxes and
+PST files (tens of GB):
+
+- **Fixed "Move to folder".** A copy/paste bug left the destination unset when
+  *Move* was selected, causing an error; it now works.
+- **No more skipped duplicates.** Delete/Move/Copy actions are collected during
+  the scan and applied afterwards (re-fetching each email by its `EntryID`),
+  instead of being applied while enumerating a folder — which silently skipped
+  items in Outlook COM and required several passes.
+- **Lower memory use.** COM objects (emails, attachments, folder item
+  collections) are now released as the scan proceeds, avoiding leaks that could
+  crash long runs over very large PST files.
+- **Safe cancellation.** Pressing *Stop* now aborts cleanly: queued
+  delete/move/copy actions are **not** applied, so nothing is changed.
+- **No cross-thread UI access.** All settings are captured once on the UI thread
+  before the background scan starts.
+
+> Tip for a 30 GB PST: **back up the .pst first**, run once in *Log only* mode to
+> review the report, and process folders in batches.
+
+## Project Layout & Tests
+
+The duplicate-detection logic lives in a small, Outlook-free library so it can be
+unit tested on any platform:
+
+- `DuplicateEMailRemoverForOutlookClassic.csproj` — the WinForms app (net8.0-windows,
+  Outlook COM). Built in Visual Studio on Windows.
+- `Core/` (`DuplicateEMailRemover.Core`, net8.0) — `IMailItem`, `MatchOptions`,
+  `DuplicateKeyBuilder`, `DuplicateClassifier`, and the deleted-email manifest.
+  No Outlook/Windows dependency.
+- `Tests/` (`DuplicateEMailRemover.Core.Tests`, xUnit) — tests for the matching
+  key, the first-wins duplicate classification, and the manifest CSV/JSON.
+
+Run the tests (no Outlook needed):
+
+```bash
+dotnet test Tests/DuplicateEMailRemover.Core.Tests.csproj
+```
+
+Continuous integration builds the Core library and runs these tests on every push
+(`.github/workflows/ci.yml`). The WinForms app itself is compiled on Windows.
 
 ## System Requirements
 - **Microsoft Office Outlook Classic** installed.
