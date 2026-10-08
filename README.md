@@ -17,6 +17,38 @@
 - **Backup Capability**: Save duplicates to a specified Windows file folder for backup.
 - **Compatibility**: Designed for Outlook Classic and does not support the "New Outlook" version.
 
+## Delete with Backup, Audit List, and Restore
+
+The tool now treats deletion as a safe, reversible, fully audited operation:
+
+- **Works directly in Outlook Classic** through COM automation, including
+  **Exchange / Office 365** accounts. Deletions made here go to *Deleted Items*
+  and sync to the server like any other Outlook change (cached-mode accounts
+  recommended for speed on very large mailboxes).
+- **Live progress with detail.** The *Go* tab shows the current folder,
+  elapsed time, processing **rate**, an **ETA**, running counts, and a live list
+  of the emails being deleted.
+- **Every deleted email is backed up first.** Before an email is deleted it is
+  exported to its own `.msg` file in a timestamped backup folder
+  (`Documents\DuplicateEmailRemover\Backup_<date>` by default, or the folder you
+  pick). If the backup fails, the email is **not** deleted.
+- **An audit list with a unique id.** Each backup folder contains
+  `DeletedEmails.csv` and `DeletedEmails.json` listing every deleted email with a
+  unique id, subject, sender, dates, size, hash, original folder, and backup
+  file.
+- **One-click restore.** The **"Restore deleted emails…"** button opens a window
+  that loads a manifest, lists the deleted emails, and puts any selected ones
+  back into Outlook — into their original folder (or the Inbox if that folder no
+  longer exists). Restore reads the `.msg` backups, so it works even on Exchange
+  where item ids change over time.
+
+### Restoring later
+
+1. On the *Go* tab click **Restore deleted emails…**.
+2. Open the `DeletedEmails.json` file inside the backup folder.
+3. Check the emails to restore and click **Restore checked** (or **Restore all
+   pending**). The manifest is updated to mark what has been restored.
+
 ## Reliability Improvements
 
 Recent changes make the tool safer and more dependable on large mailboxes and

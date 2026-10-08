@@ -33,6 +33,19 @@ namespace DuplicateEMailRemover
         // If this is specified, then it will save each email to the specified folder.
         private string? filePathToSaveEmails;
 
+        // Live progress + restore UI. These controls are created in Form1_Load
+        // (not in the generated designer file) and added to the "Go" tab.
+        private readonly System.Diagnostics.Stopwatch scanStopwatch = new();
+        private readonly System.Windows.Forms.Timer progressTimer = new();
+        private int lastProcessedCount;
+        private string? lastBackupFolder;
+        private Label lblCurrent = null!;
+        private Label lblElapsed = null!;
+        private Label lblRate = null!;
+        private Label lblEta = null!;
+        private Button btnRestore = null!;
+        private ListView lvDeleted = null!;
+
         // Folders we should skip - these folders should not really be scanned for duplicate emails.
         private static readonly SortedSet<string> FoldersToSkip = [
             "Calendar",
@@ -76,6 +89,99 @@ namespace DuplicateEMailRemover
             if (!ALLOW_MOVES_DELETES)
             {
                 Text += " (DEBUG MODE)";
+            }
+
+            BuildProgressAndRestoreUi();
+        }
+
+        // Adds the live progress details, the "deleted emails" list, and the
+        // restore button to the Go tab at runtime (keeps the designer file simple).
+        private void BuildProgressAndRestoreUi()
+        {
+            lblCurrent = new Label { Location = new Point(12, 268), AutoSize = true, Text = "Current folder: -" };
+            lblElapsed = new Label { Location = new Point(12, 292), AutoSize = true, Text = "Elapsed: 00:00:00" };
+            lblRate = new Label { Location = new Point(200, 292), AutoSize = true, Text = "Rate: 0 /s" };
+            lblEta = new Label { Location = new Point(360, 292), AutoSize = true, Text = "ETA: -" };
+
+            btnRestore = new Button
+            {
+                Location = new Point(410, 258),
+                Size = new Size(220, 34),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Text = "Restore deleted emails…"
+            };
+            btnRestore.Click += btnRestore_Click;
+
+            Label lblDeleted = new() { Location = new Point(12, 318), AutoSize = true, Text = "Deleted emails (this run):" };
+
+            lvDeleted = new ListView
+            {
+                Location = new Point(12, 340),
+                Size = new Size(616, 160),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                View = View.Details,
+                FullRowSelect = true,
+                GridLines = true
+            };
+            _ = lvDeleted.Columns.Add("Subject", 230);
+            _ = lvDeleted.Columns.Add("Sender", 150);
+            _ = lvDeleted.Columns.Add("Folder", 150);
+            _ = lvDeleted.Columns.Add("Id", 180);
+            _ = lvDeleted.Columns.Add("Deleted (UTC)", 140);
+
+            tabPage6.Controls.Add(lblCurrent);
+            tabPage6.Controls.Add(lblElapsed);
+            tabPage6.Controls.Add(lblRate);
+            tabPage6.Controls.Add(lblEta);
+            tabPage6.Controls.Add(btnRestore);
+            tabPage6.Controls.Add(lblDeleted);
+            tabPage6.Controls.Add(lvDeleted);
+
+            progressTimer.Interval = 1000;
+            progressTimer.Tick += ProgressTimer_Tick;
+        }
+
+        private void ProgressTimer_Tick(object? sender, EventArgs e)
+        {
+            TimeSpan el = scanStopwatch.Elapsed;
+            lblElapsed.Text = $"Elapsed: {el:hh\\:mm\\:ss}";
+
+            double sec = el.TotalSeconds;
+            double rate = sec > 0 ? lastProcessedCount / sec : 0;
+            lblRate.Text = $"Rate: {rate:0.#} /s";
+
+            if (rate > 0 && totalItemsToSearch > lastProcessedCount)
+            {
+                double remain = (totalItemsToSearch - lastProcessedCount) / rate;
+                lblEta.Text = $"ETA: {TimeSpan.FromSeconds(remain):hh\\:mm\\:ss}";
+            }
+            else
+            {
+                lblEta.Text = "ETA: -";
+            }
+        }
+
+        private void AddDeletedRow(DeletedEmailRecord r)
+        {
+            ListViewItem item = new(r.Subject);
+            _ = item.SubItems.Add(string.IsNullOrEmpty(r.SenderName) ? r.SenderEmail : r.SenderName);
+            _ = item.SubItems.Add(r.FolderPath);
+            _ = item.SubItems.Add(r.Id);
+            _ = item.SubItems.Add(r.DeletedUtc);
+            _ = lvDeleted.Items.Add(item);
+            item.EnsureVisible();
+        }
+
+        private void btnRestore_Click(object? sender, EventArgs e)
+        {
+            try
+            {
+                using RestoreForm rf = new(outlook);
+                _ = rf.ShowDialog(this);
+            }
+            catch (Exception ex)
+            {
+                _ = MessageBox.Show(ex.Message);
             }
         }
 
@@ -387,13 +493,21 @@ namespace DuplicateEMailRemover
         {
             btnStart.Enabled = false;
             btnStop.Enabled = true;
+            btnRestore.Enabled = false;
             btnStart.Text = "Running";
+            lvDeleted.Items.Clear();
+            lastProcessedCount = 0;
+            lastBackupFolder = null;
+            scanStopwatch.Restart();
+            progressTimer.Start();
             try
             {
                 Progress<int> folderProcessedCount = new(s => txtFoldersProcessed.Text = s.ToString());
-                Progress<int> mailProcessedCount = new(s => txtEmailsProcessed.Text = s.ToString());
+                Progress<int> mailProcessedCount = new(s => { txtEmailsProcessed.Text = s.ToString(); lastProcessedCount = s; });
                 Progress<int> duplicatesFound = new(s => txtDuplicatesFound.Text = s.ToString());
                 Progress<int> nonMailItemsSkipped = new(s => txtNonMailItemsSkipped.Text = s.ToString());
+                Progress<string> currentFolder = new(s => lblCurrent.Text = $"Current folder: {s}");
+                Progress<DeletedEmailRecord> deletedProgress = new(AddDeletedRow);
 
                 // Capture every UI-dependent setting here, on the UI thread, so the
                 // background scan never touches WinForms controls across threads
@@ -402,12 +516,17 @@ namespace DuplicateEMailRemover
 
                 tokenSource = new CancellationTokenSource();
                 CancellationToken token = tokenSource.Token;
-                await Task.Run(() => ScanFolders(settings, folderProcessedCount, mailProcessedCount, duplicatesFound, nonMailItemsSkipped, token));
+                await Task.Run(() => ScanFolders(settings, folderProcessedCount, mailProcessedCount, duplicatesFound, nonMailItemsSkipped, currentFolder, deletedProgress, token));
+                lastBackupFolder = settings.Delete ? settings.ExportRoot : null;
             }
             catch (Exception exception)
             {
                 _ = MessageBox.Show(exception.Message);
             }
+
+            progressTimer.Stop();
+            scanStopwatch.Stop();
+            ProgressTimer_Tick(this, EventArgs.Empty); // final totals
 
             // Lets show the result
             _ = new Process
@@ -418,9 +537,17 @@ namespace DuplicateEMailRemover
                 }
             }.Start();
 
+            if (!string.IsNullOrEmpty(lastBackupFolder) && Directory.Exists(lastBackupFolder))
+            {
+                _ = MessageBox.Show($"Deleted emails were backed up to:\n{lastBackupFolder}\n\n" +
+                    $"A list with a unique id for every deleted email is in {DeletedEmailManifest.CsvFileName} / {DeletedEmailManifest.JsonFileName}.\n" +
+                    "Use \"Restore deleted emails…\" to put any of them back.");
+            }
+
             btnStart.Text = "Start";
             btnStart.Enabled = true;
             btnStop.Enabled = false;
+            btnRestore.Enabled = true;
         }
 
         // Snapshot of everything the scan needs, read once on the UI thread.
@@ -462,6 +589,18 @@ namespace DuplicateEMailRemover
             }
 
             s.SaveFilePath = filePathToSaveEmails;
+
+            // For deletions, always keep a restorable backup. Use the folder the
+            // user picked for saving duplicates if any, otherwise a per-run folder
+            // under the user's Documents.
+            if (s.Delete)
+            {
+                string baseDir = string.IsNullOrEmpty(filePathToSaveEmails)
+                    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "DuplicateEmailRemover")
+                    : filePathToSaveEmails;
+                s.ExportRoot = Path.Combine(baseDir, "Backup_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+            }
+
             return s;
         }
 
@@ -469,7 +608,10 @@ namespace DuplicateEMailRemover
             IProgress<int> foldersProgress,
             IProgress<int> fileProgress,
             IProgress<int> duplicateCount,
-            IProgress<int> nonMailItemCount, CancellationToken token)
+            IProgress<int> nonMailItemCount,
+            IProgress<string> currentFolderProgress,
+            IProgress<DeletedEmailRecord> deletedProgress,
+            CancellationToken token)
         {
             int folderCount = settings.Folders.Count;
 
@@ -502,15 +644,33 @@ namespace DuplicateEMailRemover
             int totalDuplicateCount = 0;
             int totalNonMailItemCount = 0;
 
+            // When deleting, prepare a restorable backup folder + manifest.
+            DeletedEmailManifest? manifest = null;
+            StreamWriter? csvWriter = null;
+            if (settings.Delete && settings.ExportRoot != null)
+            {
+                manifest = new DeletedEmailManifest
+                {
+                    CreatedUtc = DateTime.UtcNow.ToString("u"),
+                    BackupFolder = settings.ExportRoot
+                };
+                _ = Directory.CreateDirectory(manifest.MsgFolder);
+                csvWriter = new StreamWriter(manifest.CsvPath, false, Encoding.UTF8);
+                csvWriter.WriteLine(DeletedEmailRecord.CsvHeader());
+            }
+
             using StreamWriter sw = new(logToPath, false, Encoding.UTF8, 65536);
             StringBuilder sb = new(1024);
 
+            try
+            {
             for (int i = 0; i < folderCount && !canceled; i++)
             {
                 Outlook.Folder folder = settings.Folders[i];
                 string folderPath = folder.FolderPath;
                 Outlook.Items items = folder.Items;
                 foldersProgress.Report(i);
+                currentFolderProgress.Report(folderPath);
 
                 foreach (object? item in items)
                 {
@@ -644,9 +804,10 @@ namespace DuplicateEMailRemover
                             }
                         }
 
-                        // If the user requested to save the email to a folder, do that first before moving or deleting.
-                        // (SaveAs does not modify the Items collection, so it is safe inline.)
-                        if (settings.SaveFilePath != null)
+                        // For non-delete actions, optionally save a copy to a mirrored
+                        // file-system folder (legacy behaviour). Deletions use the
+                        // restorable backup below instead.
+                        if (settings.SaveFilePath != null && !settings.Delete)
                         {
                             try
                             {
@@ -663,6 +824,43 @@ namespace DuplicateEMailRemover
                             }
                         }
 
+                        DeletedEmailRecord? record = null;
+
+                        // Before deleting, back up the email to a unique .msg file and
+                        // record it in the manifest so it can be listed and restored.
+                        if (settings.Delete && manifest != null)
+                        {
+                            string id = Guid.NewGuid().ToString("N");
+                            string msgRelative = Path.Combine(DeletedEmailManifest.MsgSubFolder, id + ".msg");
+                            string msgFull = Path.Combine(manifest.BackupFolder, msgRelative);
+
+                            record = new DeletedEmailRecord
+                            {
+                                Id = id,
+                                FolderPath = folderPath,
+                                StoreId = folder.StoreID,
+                                OriginalEntryId = mailItem.EntryID,
+                                Subject = mailItem.Subject ?? "",
+                                SenderName = mailItem.SenderName ?? "",
+                                SenderEmail = mailItem.SenderEmailAddress ?? "",
+                                SentOn = mailItem.SentOn.ToString(),
+                                ReceivedTime = mailItem.ReceivedTime.ToString(),
+                                Size = mailItem.Size,
+                                Hash = hash,
+                                MsgFile = msgRelative
+                            };
+
+                            try
+                            {
+                                mailItem.SaveAs(msgFull, Outlook.OlSaveAsType.olMSGUnicode);
+                            }
+                            catch (Exception error)
+                            {
+                                LogErrorMessage(sw, error, "Email backed up to file");
+                                record = null; // cannot guarantee a restorable backup; do not delete
+                            }
+                        }
+
                         if (settings.Open)
                         {
                             // Opening a window does not modify the Items collection, so it is safe inline.
@@ -675,13 +873,24 @@ namespace DuplicateEMailRemover
                                 LogErrorMessage(sw, error, "Email opened in Outlook");
                             }
                         }
-                        else if (settings.Delete || settings.Move || settings.Copy)
+                        else if (settings.Delete)
+                        {
+                            if (record != null)
+                            {
+                                // Defer the delete; finalize the manifest entry once removed.
+                                deferred.Add(new DeferredAction(mailItem.EntryID, folder.StoreID, folderPath, record));
+                                sw.Write("  Email queued for deletion\r\n");
+                            }
+                            else
+                            {
+                                sw.Write("  Skipped deletion (backup failed, email kept)\r\n");
+                            }
+                        }
+                        else if (settings.Move || settings.Copy)
                         {
                             // Defer any action that mutates the folder's Items collection.
-                            deferred.Add(new DeferredAction(mailItem.EntryID, folder.StoreID, folderPath));
-                            sw.Write(settings.Delete
-                                ? "  Email queued for deletion\r\n"
-                                : settings.Move ? "  Email queued to move\r\n" : "  Email queued to copy\r\n");
+                            deferred.Add(new DeferredAction(mailItem.EntryID, folder.StoreID, folderPath, null));
+                            sw.Write(settings.Move ? "  Email queued to move\r\n" : "  Email queued to copy\r\n");
                         }
                     }
                     else
@@ -701,12 +910,37 @@ namespace DuplicateEMailRemover
                 return;
             }
 
-            ApplyDeferredActions(ns, settings, deferred, sw);
+            ApplyDeferredActions(ns, settings, deferred, sw, manifest, csvWriter, deletedProgress);
+            }
+            finally
+            {
+                if (csvWriter != null)
+                {
+                    csvWriter.Flush();
+                    csvWriter.Dispose();
+                }
+
+                if (manifest != null)
+                {
+                    try
+                    {
+                        manifest.SaveJson();
+                        sw.WriteLine($"\r\nBacked up {manifest.Records.Count} deleted email(s) to: {manifest.BackupFolder}");
+                        sw.WriteLine($"Manifest (restore list with unique ids): {manifest.JsonPath}");
+                    }
+                    catch (Exception error)
+                    {
+                        LogErrorMessage(sw, error, "writing the manifest");
+                    }
+                }
+            }
         }
 
         // Phase 2: apply the delete/move/copy actions once scanning is finished,
-        // re-fetching each item by its stable EntryID.
-        private void ApplyDeferredActions(Outlook.NameSpace ns, ScanSettings settings, List<DeferredAction> deferred, StreamWriter sw)
+        // re-fetching each item by its stable EntryID. Deletions finalize their
+        // manifest entry (unique id + CSV row) only after the item is truly removed.
+        private void ApplyDeferredActions(Outlook.NameSpace ns, ScanSettings settings, List<DeferredAction> deferred,
+            StreamWriter sw, DeletedEmailManifest? manifest, StreamWriter? csvWriter, IProgress<DeletedEmailRecord> deletedProgress)
         {
             if (!ALLOW_MOVES_DELETES)
             {
@@ -714,6 +948,7 @@ namespace DuplicateEMailRemover
                 return;
             }
 
+            int appliedSinceSave = 0;
             foreach (DeferredAction act in deferred)
             {
                 Outlook.MailItem? mailItem = null;
@@ -739,6 +974,23 @@ namespace DuplicateEMailRemover
                     {
                         mailItem.Delete();
                         sw.Write($"  Email Deleted ({act.FolderPath})\r\n");
+
+                        // Only now is the deletion real: record it in the manifest.
+                        if (act.Record != null)
+                        {
+                            act.Record.DeletedUtc = DateTime.UtcNow.ToString("u");
+                            manifest?.Records.Add(act.Record);
+                            csvWriter?.WriteLine(act.Record.ToCsvLine());
+                            deletedProgress.Report(act.Record);
+
+                            // Persist the manifest periodically so a crash loses little.
+                            if (++appliedSinceSave >= 500)
+                            {
+                                appliedSinceSave = 0;
+                                csvWriter?.Flush();
+                                try { manifest?.SaveJson(); } catch { /* non-fatal */ }
+                            }
+                        }
                     }
                 }
                 catch (Exception error)
@@ -832,10 +1084,16 @@ namespace DuplicateEMailRemover
 
         public Outlook.MAPIFolder? Destination { get; set; }
         public string? SaveFilePath { get; set; }
+
+        // When Delete is selected, every deleted email is backed up (as a .msg)
+        // into this folder, together with a manifest listing them by unique id.
+        public string? ExportRoot { get; set; }
     }
 
     // A duplicate action to apply after the scan, identified by its stable EntryID.
-    internal sealed record DeferredAction(string EntryId, string StoreId, string FolderPath);
+    // For deletions, Record carries the manifest entry to finalize once the item
+    // is actually removed.
+    internal sealed record DeferredAction(string EntryId, string StoreId, string FolderPath, DeletedEmailRecord? Record);
 
     internal sealed class FolderTreeNode : TreeNode
     {
