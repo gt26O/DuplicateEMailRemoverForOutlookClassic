@@ -17,6 +17,28 @@
 - **Backup Capability**: Save duplicates to a specified Windows file folder for backup.
 - **Compatibility**: Designed for Outlook Classic and does not support the "New Outlook" version.
 
+## Reliability Improvements
+
+Recent changes make the tool safer and more dependable on large mailboxes and
+PST files (tens of GB):
+
+- **Fixed "Move to folder".** A copy/paste bug left the destination unset when
+  *Move* was selected, causing an error; it now works.
+- **No more skipped duplicates.** Delete/Move/Copy actions are collected during
+  the scan and applied afterwards (re-fetching each email by its `EntryID`),
+  instead of being applied while enumerating a folder — which silently skipped
+  items in Outlook COM and required several passes.
+- **Lower memory use.** COM objects (emails, attachments, folder item
+  collections) are now released as the scan proceeds, avoiding leaks that could
+  crash long runs over very large PST files.
+- **Safe cancellation.** Pressing *Stop* now aborts cleanly: queued
+  delete/move/copy actions are **not** applied, so nothing is changed.
+- **No cross-thread UI access.** All settings are captured once on the UI thread
+  before the background scan starts.
+
+> Tip for a 30 GB PST: **back up the .pst first**, run once in *Log only* mode to
+> review the report, and process folders in batches.
+
 ## System Requirements
 - **Microsoft Office Outlook Classic** installed.
 - **.NET 8 LTS** runtime.

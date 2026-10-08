@@ -9,6 +9,7 @@
 
 
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -393,10 +394,15 @@ namespace DuplicateEMailRemover
                 Progress<int> mailProcessedCount = new(s => txtEmailsProcessed.Text = s.ToString());
                 Progress<int> duplicatesFound = new(s => txtDuplicatesFound.Text = s.ToString());
                 Progress<int> nonMailItemsSkipped = new(s => txtNonMailItemsSkipped.Text = s.ToString());
-                //outlook.GetNamespace("MAPI").Folders
+
+                // Capture every UI-dependent setting here, on the UI thread, so the
+                // background scan never touches WinForms controls across threads
+                // (which can throw InvalidOperationException on large runs).
+                ScanSettings settings = CaptureScanSettings();
+
                 tokenSource = new CancellationTokenSource();
                 CancellationToken token = tokenSource.Token;
-                await Task.Run(() => ScanFolders(folderProcessedCount, mailProcessedCount, duplicatesFound, nonMailItemsSkipped, token));
+                await Task.Run(() => ScanFolders(settings, folderProcessedCount, mailProcessedCount, duplicatesFound, nonMailItemsSkipped, token));
             }
             catch (Exception exception)
             {
@@ -417,160 +423,190 @@ namespace DuplicateEMailRemover
             btnStop.Enabled = false;
         }
 
-        public void ScanFolders(IProgress<int> foldersProgress,
+        // Snapshot of everything the scan needs, read once on the UI thread.
+        private ScanSettings CaptureScanSettings()
+        {
+            ScanSettings s = new();
+
+            foreach (object? obj in listBoxOfFoldersToProcess.Items)
+            {
+                s.Folders.Add(((FolderTreeNode)obj).OutlookFolder);
+            }
+
+            s.MatchSentOn = checkBoxMatchOnSentOn.Checked;
+            s.MatchReceivedTime = checkBoxMatchOnReceivedTime.Checked;
+            s.MatchLastModTime = checkBoxMatchOnLastModTime.Checked;
+            s.MatchSenderEmail = checkBoxMatchOnSenderEmail.Checked;
+            s.MatchTo = checkBoxMatchOnTo.Checked;
+            s.MatchCC = checkBoxMatchOnCC.Checked;
+            s.MatchBCC = checkBoxMatchOnBCC.Checked;
+            s.MatchSubject = checkBoxMatchOnSubject.Checked;
+            s.MatchBody = checkBoxMatchOnBody.Checked;
+            s.MatchHTMLBody = checkBoxMatchOnHTMLBody.Checked;
+            s.MatchAttachment = checkBoxMatchOnAttachment.Checked;
+
+            s.Copy = radioButtonCopyToFolder.Checked;
+            s.Move = radioButtonMoveToFolder.Checked;
+            s.Open = radioButtonOpenEachInOutlook.Checked;
+            s.Delete = radioButtonDeleteEmails.Checked;
+
+            // Fixed: previously this test referenced "Copy" twice, so choosing
+            // "Move to folder" left the destination null and Move(null) threw.
+            if (s.Copy || s.Move)
+            {
+                FolderTreeNode? item = (FolderTreeNode?)cboDestinationFolder.SelectedItem;
+                if (item != null)
+                {
+                    s.Destination = item.OutlookFolder;
+                }
+            }
+
+            s.SaveFilePath = filePathToSaveEmails;
+            return s;
+        }
+
+        public void ScanFolders(ScanSettings settings,
+            IProgress<int> foldersProgress,
             IProgress<int> fileProgress,
             IProgress<int> duplicateCount,
             IProgress<int> nonMailItemCount, CancellationToken token)
         {
-            // Set myItems = myContacts.Restrict("[LastModificationTime] > '01/1/2003'") 
-            // As a safeguard, lets check to make sure we do not have any duplicate folders in listBoxOfFoldersToProcess
-            int folderCount = listBoxOfFoldersToProcess.Items.Count;
-            string[] folders = new string[folderCount];
+            int folderCount = settings.Folders.Count;
+
+            // As a safeguard, make sure we do not have any duplicate folders selected.
             for (int i = 0; i < folderCount; i++)
             {
-                folders[i] = ((FolderTreeNode)listBoxOfFoldersToProcess.Items[i]).Path;
-                //need to test
-                List<int> ints = [1];
-
-                List<int> ints2 = ints.ToArray().Select(i => i + 1).ToList();
-
-                //folders[i] = listBoxOfFoldersToProcess.Items[i].ddTostring();
-            }
-
-            for (int i = 0; i < folderCount; i++)
-            {
-                foldersProgress.Report(i);
-
-                //string curFolder = listBoxOfFoldersToProcess.Items[i].ToString();
                 for (int j = i + 1; j < folderCount; j++)
                 {
-                    if (folders[i] == folders[j])
+                    if (settings.Folders[i].FolderPath == settings.Folders[j].FolderPath)
                     {
-                        _ = MessageBox.Show("Duplicate folders found in listBoxOfFoldersToProcess. Please remove duplicate folders.");
+                        _ = MessageBox.Show("Duplicate folders found in the processing list. Please remove duplicate folders.");
                         return;
                     }
                 }
             }
 
-            Outlook.MAPIFolder? moveTo = null;
-            if (radioButtonCopyToFolder.Checked || radioButtonCopyToFolder.Checked)
-            {
-                FolderTreeNode? item = (FolderTreeNode?)cboDestinationFolder.SelectedItem;
-                if (item != null)
-                {
-                    moveTo = item!.OutlookFolder;
-                }
-            }
+            Outlook.NameSpace ns = outlook.GetNamespace("MAPI");
 
-            // Lets start removing the duplicates. We will iterate through the listBoxOfFoldersToProcess
-            // and remove the duplicates as we find them.
+            // hash -> folder path of the first (kept) occurrence.
             Dictionary<string, string> hs = [];
 
+            // Delete/Move/Copy are collected here and applied AFTER the scan.
+            // Acting on items while enumerating a folder's Items collection silently
+            // skips items in Outlook COM, so duplicates would be missed otherwise.
+            List<DeferredAction> deferred = [];
+
             bool warningNotificationEnabled = true;
+            bool canceled = false;
             int totalItemCount = 0;
             int totalDuplicateCount = 0;
             int totalNonMailItemCount = 0;
 
             using StreamWriter sw = new(logToPath, false, Encoding.UTF8, 65536);
             StringBuilder sb = new(1024);
-            int count = listBoxOfFoldersToProcess.Items.Count;
-            for (int i = 0; i < count; i++)
+
+            for (int i = 0; i < folderCount && !canceled; i++)
             {
-                FolderTreeNode node = (FolderTreeNode)listBoxOfFoldersToProcess.Items[i];
-                Outlook.Items items = node.OutlookFolder.Items;
+                Outlook.Folder folder = settings.Folders[i];
+                string folderPath = folder.FolderPath;
+                Outlook.Items items = folder.Items;
                 foldersProgress.Report(i);
 
                 foreach (object? item in items)
                 {
+                    if (token.IsCancellationRequested)
+                    {
+                        sw.Write("  User canceled via Stop button.\r\n");
+                        canceled = true;
+                        break;
+                    }
+
                     fileProgress.Report(++totalItemCount);
 
-                    if (item is not Outlook.MailItem)
+                    if (item is not Outlook.MailItem mailItem)
                     {
                         nonMailItemCount.Report(++totalNonMailItemCount);
+                        if (item != null)
+                        {
+                            _ = Marshal.ReleaseComObject(item);
+                        }
                         continue;
                     }
 
-                    Outlook.MailItem mailItem = (Outlook.MailItem)item;
-
                     // Build the attributes to check for duplicates. (Subject/Received date/Sender/etc.)
                     _ = sb.Clear();
-                    if (checkBoxMatchOnSentOn.Checked)
+                    if (settings.MatchSentOn)
                     {
                         _ = sb.Append(mailItem.SentOn.ToString());
                     }
 
-                    if (checkBoxMatchOnReceivedTime.Checked)
+                    if (settings.MatchReceivedTime)
                     {
                         _ = sb.Append(mailItem.ReceivedTime.ToString());
                     }
 
-                    if (checkBoxMatchOnLastModTime.Checked)
+                    if (settings.MatchLastModTime)
                     {
                         _ = sb.Append(mailItem.LastModificationTime.ToString());
                     }
 
-                    if (checkBoxMatchOnSenderEmail.Checked)
+                    if (settings.MatchSenderEmail)
                     {
                         _ = sb.Append(mailItem.SenderEmailAddress);
                     }
 
-                    if (checkBoxMatchOnTo.Checked)
+                    if (settings.MatchTo)
                     {
                         _ = sb.Append(mailItem.To);
                     }
 
-                    if (checkBoxMatchOnCC.Checked)
+                    if (settings.MatchCC)
                     {
                         _ = sb.Append(mailItem.CC);
                     }
 
-                    if (checkBoxMatchOnBCC.Checked)
+                    if (settings.MatchBCC)
                     {
                         _ = sb.Append(mailItem.BCC);
                     }
 
-                    if (checkBoxMatchOnSubject.Checked)
+                    if (settings.MatchSubject)
                     {
                         _ = sb.Append(mailItem.Subject);
                     }
 
-                    if (checkBoxMatchOnBody.Checked)
+                    if (settings.MatchBody)
                     {
                         _ = sb.Append(mailItem.Body);
                     }
 
-                    if (checkBoxMatchOnHTMLBody.Checked)
+                    if (settings.MatchHTMLBody)
                     {
                         _ = sb.Append(mailItem.HTMLBody);
                     }
 
-                    if (checkBoxMatchOnAttachment.Checked)
+                    if (settings.MatchAttachment)
                     {
-                        foreach (Outlook.Attachment attachment in mailItem.Attachments)
+                        Outlook.Attachments attachments = mailItem.Attachments;
+                        foreach (Outlook.Attachment attachment in attachments)
                         {
                             _ = sb.Append(attachment.FileName);
+                            _ = Marshal.ReleaseComObject(attachment);
                         }
+                        _ = Marshal.ReleaseComObject(attachments);
                     }
 
                     byte[] buffer = Encoding.UTF8.GetBytes(sb.ToString());
                     byte[] digest = MD5.HashData(buffer);
 
-                    //StringBuilder result = new StringBuilder(digest.Length * 2);
                     _ = sb.Clear();
-
                     for (int j = 0; j < digest.Length; j++)
                     {
                         _ = sb.Append(digest[j].ToString("X2"));
                     }
                     string hash = sb.ToString();
 
-                    if (token.IsCancellationRequested)
-                    {
-                        sw.Write("  User canceled via Stop button.\r\n");
-                        return;
-                    }
-
-                    if (hs.ContainsKey(hash))
+                    if (hs.TryGetValue(hash, out string? origFolder))
                     {
                         duplicateCount.Report(++totalDuplicateCount);
 
@@ -580,13 +616,12 @@ namespace DuplicateEMailRemover
                             $"\n  Sent On: {mailItem.SentOn} " +
                             $"\n  Sender:  {mailItem.SenderEmailAddress} " +
                             $"\n  Subject: {mailItem.Subject ?? ""}");
-                        string OrigFolder = hs[hash];
-                        if (OrigFolder != node.Path)
+                        if (origFolder != folderPath)
                         {
-                            _ = sb.AppendLine($"\n  Original was here:\n    {OrigFolder}");
+                            _ = sb.AppendLine($"\n  Original was here:\n    {origFolder}");
                         }
 
-                        _ = sb.AppendLine($"\n  Duplicate found here:\n    {node.Path}");
+                        _ = sb.AppendLine($"\n  Duplicate found here:\n    {folderPath}");
                         _ = sb.AppendLine($"\n  HASH: {hash}");  //for debug
                         string msg = sb.ToString();
                         sw.WriteLine(msg);
@@ -603,60 +638,34 @@ namespace DuplicateEMailRemover
                             else if (dialog == DialogResult.Cancel)
                             {
                                 sw.WriteLine("  User canceled via Cancel button.\r\n");
-                                return;
+                                canceled = true;
+                                _ = Marshal.ReleaseComObject(mailItem);
+                                break;
                             }
                         }
 
-                        // If the user requested to save the email to a folder, do that first before moving or deleting. 
-                        if (filePathToSaveEmails != null)
+                        // If the user requested to save the email to a folder, do that first before moving or deleting.
+                        // (SaveAs does not modify the Items collection, so it is safe inline.)
+                        if (settings.SaveFilePath != null)
                         {
-                            string sentOnDate = mailItem.SentOn.ToString();
-                            string filenameFriendlyDate = string.Join("_", sentOnDate.Split(Path.GetInvalidFileNameChars()));
-                            string path2 = $"{filePathToSaveEmails}{node.Path}\\{filenameFriendlyDate} {hash}.msg";
-                            _ = Directory.CreateDirectory(filePathToSaveEmails + node.Path);
-                            mailItem.SaveAs(path2);
-                            sw.WriteLine($" Email saved to {path2}");
+                            try
+                            {
+                                string sentOnDate = mailItem.SentOn.ToString();
+                                string filenameFriendlyDate = string.Join("_", sentOnDate.Split(Path.GetInvalidFileNameChars()));
+                                string path2 = $"{settings.SaveFilePath}{folderPath}\\{filenameFriendlyDate} {hash}.msg";
+                                _ = Directory.CreateDirectory(settings.SaveFilePath + folderPath);
+                                mailItem.SaveAs(path2);
+                                sw.WriteLine($" Email saved to {path2}");
+                            }
+                            catch (Exception error)
+                            {
+                                LogErrorMessage(sw, error, "Email saved to file");
+                            }
                         }
 
-                        if (radioButtonCopyToFolder.Checked)
+                        if (settings.Open)
                         {
-                            if (ALLOW_MOVES_DELETES)
-                            {
-                                try
-                                {
-                                    Outlook.MailItem copiedItem = mailItem.Copy();
-                                    copiedItem.Move(moveTo);
-                                }
-                                catch (Exception error)
-                                {
-                                    LogErrorMessage(sw, error, "Email copied to mailbox folder");
-                                }
-                            }
-                            else
-                            {
-                                sw.Write("  Simulated: Email copied to mailbox folder\r\n");
-                            }
-                        }
-                        else if (radioButtonMoveToFolder.Checked)
-                        {
-                            if (ALLOW_MOVES_DELETES)
-                            {
-                                try
-                                {
-                                    mailItem.Move(moveTo);
-                                }
-                                catch (Exception error)
-                                {
-                                    LogErrorMessage(sw, error, "Email moved to mailbox folder");
-                                }
-                            }
-                            else
-                            {
-                                sw.Write("  Simulated: Email moved to mailbox folder\r\n");
-                            }
-                        }
-                        else if (radioButtonOpenEachInOutlook.Checked)
-                        {
+                            // Opening a window does not modify the Items collection, so it is safe inline.
                             try
                             {
                                 mailItem.Display(true);
@@ -666,31 +675,83 @@ namespace DuplicateEMailRemover
                                 LogErrorMessage(sw, error, "Email opened in Outlook");
                             }
                         }
-                        else if (radioButtonDeleteEmails.Checked)
+                        else if (settings.Delete || settings.Move || settings.Copy)
                         {
-                            sw.Write("  Email Deleted\r\n");
-
-                            if (ALLOW_MOVES_DELETES)
-                            {
-                                try
-                                {
-                                    mailItem.Delete();
-                                }
-                                catch (Exception error)
-                                {
-                                    LogErrorMessage(sw, error, "Email Deleted");
-                                }
-                            }
-                            else
-                            {
-                                sw.Write("  Simulated: Email Deleted\r\n");
-                            }
+                            // Defer any action that mutates the folder's Items collection.
+                            deferred.Add(new DeferredAction(mailItem.EntryID, folder.StoreID, folderPath));
+                            sw.Write(settings.Delete
+                                ? "  Email queued for deletion\r\n"
+                                : settings.Move ? "  Email queued to move\r\n" : "  Email queued to copy\r\n");
                         }
-
                     }
                     else
                     {
-                        hs.Add(sb.ToString(), node.Path);
+                        hs[hash] = folderPath;
+                    }
+
+                    _ = Marshal.ReleaseComObject(mailItem);
+                }
+
+                _ = Marshal.ReleaseComObject(items);
+            }
+
+            if (canceled)
+            {
+                sw.WriteLine($"\r\nRun canceled. {deferred.Count} queued action(s) were NOT applied; nothing was deleted, moved, or copied.");
+                return;
+            }
+
+            ApplyDeferredActions(ns, settings, deferred, sw);
+        }
+
+        // Phase 2: apply the delete/move/copy actions once scanning is finished,
+        // re-fetching each item by its stable EntryID.
+        private void ApplyDeferredActions(Outlook.NameSpace ns, ScanSettings settings, List<DeferredAction> deferred, StreamWriter sw)
+        {
+            if (!ALLOW_MOVES_DELETES)
+            {
+                sw.WriteLine($"  Simulated (DEBUG MODE): {deferred.Count} action(s) would be applied.");
+                return;
+            }
+
+            foreach (DeferredAction act in deferred)
+            {
+                Outlook.MailItem? mailItem = null;
+                try
+                {
+                    mailItem = ns.GetItemFromID(act.EntryId, act.StoreId) as Outlook.MailItem;
+                    if (mailItem == null)
+                    {
+                        continue;
+                    }
+
+                    if (settings.Copy)
+                    {
+                        Outlook.MailItem copiedItem = mailItem.Copy();
+                        copiedItem.Move(settings.Destination);
+                        _ = Marshal.ReleaseComObject(copiedItem);
+                    }
+                    else if (settings.Move)
+                    {
+                        mailItem.Move(settings.Destination);
+                    }
+                    else if (settings.Delete)
+                    {
+                        mailItem.Delete();
+                        sw.Write($"  Email Deleted ({act.FolderPath})\r\n");
+                    }
+                }
+                catch (Exception error)
+                {
+                    LogErrorMessage(sw, error, settings.Copy
+                        ? "Email copied to mailbox folder"
+                        : settings.Move ? "Email moved to mailbox folder" : "Email Deleted");
+                }
+                finally
+                {
+                    if (mailItem != null)
+                    {
+                        _ = Marshal.ReleaseComObject(mailItem);
                     }
                 }
             }
@@ -745,6 +806,36 @@ namespace DuplicateEMailRemover
         }
     }
 
+
+    // A UI-thread snapshot of all settings the background scan needs, so the
+    // scan never reads WinForms controls from a non-UI thread.
+    internal sealed class ScanSettings
+    {
+        public List<Outlook.Folder> Folders { get; } = [];
+
+        public bool MatchSentOn { get; set; }
+        public bool MatchReceivedTime { get; set; }
+        public bool MatchLastModTime { get; set; }
+        public bool MatchSenderEmail { get; set; }
+        public bool MatchTo { get; set; }
+        public bool MatchCC { get; set; }
+        public bool MatchBCC { get; set; }
+        public bool MatchSubject { get; set; }
+        public bool MatchBody { get; set; }
+        public bool MatchHTMLBody { get; set; }
+        public bool MatchAttachment { get; set; }
+
+        public bool Copy { get; set; }
+        public bool Move { get; set; }
+        public bool Open { get; set; }
+        public bool Delete { get; set; }
+
+        public Outlook.MAPIFolder? Destination { get; set; }
+        public string? SaveFilePath { get; set; }
+    }
+
+    // A duplicate action to apply after the scan, identified by its stable EntryID.
+    internal sealed record DeferredAction(string EntryId, string StoreId, string FolderPath);
 
     internal sealed class FolderTreeNode : TreeNode
     {
