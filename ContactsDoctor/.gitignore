@@ -1,0 +1,14 @@
+# Never commit client data or tool output
+*.vcf
+*.pst
+*.ost
+*.msg
+*.json
+diagnostic_*/
+sauvegarde_*/
+instantanes/
+rapport.html
+problemes.csv
+groupes.csv
+plan-*.csv
+journal*.csv

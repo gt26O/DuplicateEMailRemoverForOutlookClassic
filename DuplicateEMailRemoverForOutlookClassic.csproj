@@ -21,6 +21,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- ContactsDoctor is a separate tool with its own solution (ContactsDoctor/ContactsDoctor.sln). -->
+    <Compile Remove="ContactsDoctor/**" />
+    <None Remove="ContactsDoctor/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.13.2" />
   </ItemGroup>
 

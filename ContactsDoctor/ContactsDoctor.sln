@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ContactsDoctor.Core", "Core\ContactsDoctor.Core.csproj", "{A1EB52D6-C6F5-4BC0-AB7A-9E41C9E845F4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ContactsDoctor.Cli", "Cli\ContactsDoctor.Cli.csproj", "{516D371E-83EE-49CA-867D-1B23E2AEAC15}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ContactsDoctor.Tests", "Tests\ContactsDoctor.Tests.csproj", "{0A4F58C9-075B-4ECA-B4DB-96CE23E0B1F3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A1EB52D6-C6F5-4BC0-AB7A-9E41C9E845F4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1EB52D6-C6F5-4BC0-AB7A-9E41C9E845F4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1EB52D6-C6F5-4BC0-AB7A-9E41C9E845F4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1EB52D6-C6F5-4BC0-AB7A-9E41C9E845F4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{516D371E-83EE-49CA-867D-1B23E2AEAC15}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{516D371E-83EE-49CA-867D-1B23E2AEAC15}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{516D371E-83EE-49CA-867D-1B23E2AEAC15}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{516D371E-83EE-49CA-867D-1B23E2AEAC15}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0A4F58C9-075B-4ECA-B4DB-96CE23E0B1F3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0A4F58C9-075B-4ECA-B4DB-96CE23E0B1F3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0A4F58C9-075B-4ECA-B4DB-96CE23E0B1F3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0A4F58C9-075B-4ECA-B4DB-96CE23E0B1F3}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
